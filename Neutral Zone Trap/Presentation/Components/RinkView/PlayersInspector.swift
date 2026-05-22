@@ -27,7 +27,7 @@ struct PlayersInspector: View {
                     ForEach(activeGroupModels, id: \.id) { group in
                         GroupCard(
                             group: group,
-                            canShowOverlay: modeStore.mode == .playback,
+                            canShowOverlay: modeStore.mode == .playback || modeStore.mode == .recording,
                             onShowHeatmap: { showHeatmap(for: group) }
                         )
                     }
