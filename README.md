@@ -19,7 +19,7 @@ Uživatelský návod je v samostatném dokumentu [`USER_GUIDE.md`](USER_GUIDE.md
 <!-- DOWNLOAD-START -->
 [![Stáhnout DMG](https://img.shields.io/badge/Stáhnout-DMG-blue?style=for-the-badge&logo=apple)](https://github.com/sdrda/NeutralZoneTrap/releases/latest/download/Neutral-Zone-Trap.dmg)
 
-**Aktuální verze:** [](https://github.com/sdrda/NeutralZoneTrap/releases/tag/v1.0.1) — commit  (2026-05-22 06:43 UTC)
+**Aktuální verze:** [](https://github.com/sdrda/NeutralZoneTrap/releases/tag/v1.0.2) — commit  (2026-05-22 09:44 UTC)
 
 Přímý odkaz vždy ukazuje na nejnovější build: https://github.com/sdrda/NeutralZoneTrap/releases/latest/download/Neutral-Zone-Trap.dmg
 <!-- DOWNLOAD-END -->
