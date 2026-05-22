@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - 'USER_GUIDE.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, DMG & GitHub Release
+    runs-on: macos-26
+    timeout-minutes: 45
+    if: github.actor != 'github-actions[bot]'
+
+    env:
+      SCHEME: Neutral Zone Trap
+      APP_NAME: Neutral Zone Trap
+      DMG_NAME: Neutral-Zone-Trap.dmg
+      VERSION: v1.0.${{ github.run_number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Select Xcode 26
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE_PATH" ]; then
+            XCODE_PATH="/Applications/Xcode.app"
+          fi
+          echo "Selecting: $XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build Release (.app, ad-hoc signed)
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild \
+            -project "Neutral Zone Trap.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Locate built .app
+        id: locate
+        run: |
+          APP_PATH=$(find build/DerivedData/Build/Products -type d -name "${APP_NAME}.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::App bundle not found"
+            exit 1
+          fi
+          echo "Found: $APP_PATH"
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Create DMG
+        run: |
+          set -euo pipefail
+          STAGE_DIR="build/dmg-stage"
+          rm -rf "$STAGE_DIR"
+          mkdir -p "$STAGE_DIR"
+          cp -R "${{ steps.locate.outputs.app_path }}" "$STAGE_DIR/"
+          ln -s /Applications "$STAGE_DIR/Applications"
+
+          hdiutil create \
+            -volname "$APP_NAME" \
+            -srcfolder "$STAGE_DIR" \
+            -ov \
+            -format UDZO \
+            "build/$DMG_NAME"
+
+          ls -la build/
+          du -h "build/$DMG_NAME"
+
+      - name: Create GitHub Release
+        id: gh_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="$VERSION"
+          DATE="$(date -u +'%Y-%m-%d %H:%M UTC')"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          NOTES_FILE="$(mktemp)"
+          {
+            echo "Automatický build z commitu \`$SHORT_SHA\`."
+            echo ""
+            echo "Sestaveno: $DATE"
+            echo ""
+            echo "**Pozor:** DMG je podepsán pouze ad-hoc. Při prvním spuštění klikněte na aplikaci pravým tlačítkem a zvolte _Otevřít_, aby Gatekeeper povolil běh."
+          } > "$NOTES_FILE"
+
+          gh release create "$TAG" \
+            "build/$DMG_NAME" \
+            --title "$TAG" \
+            --notes-file "$NOTES_FILE" \
+            --target "$GITHUB_SHA"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Update README download section
+        env:
+          TAG: ${{ steps.gh_release.outputs.tag }}
+          DATE: ${{ steps.gh_release.outputs.date }}
+          SHORT_SHA: ${{ steps.gh_release.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${DMG_NAME}"
+          RELEASE_URL="https://github.com/${REPO}/releases/tag/${TAG}"
+
+          python3 - <<PY
+          import os, re, pathlib
+
+          path = pathlib.Path("README.md")
+          text = path.read_text(encoding="utf-8")
+
+          tag = os.environ["TAG"]
+          date = os.environ["DATE"]
+          short_sha = os.environ["SHORT_SHA"]
+          download_url = "${DOWNLOAD_URL}"
+          release_url = "${RELEASE_URL}"
+
+          block = (
+              "<!-- DOWNLOAD-START -->\n"
+              f"[![Stáhnout DMG](https://img.shields.io/badge/Stáhnout-DMG-blue?style=for-the-badge&logo=apple)]({download_url})\n\n"
+              f"**Aktuální verze:** [`{tag}`]({release_url}) — commit `{short_sha}` ({date})\n\n"
+              f"Přímý odkaz vždy ukazuje na nejnovější build: {download_url}\n"
+              "<!-- DOWNLOAD-END -->"
+          )
+
+          pattern = re.compile(r"<!-- DOWNLOAD-START -->.*?<!-- DOWNLOAD-END -->", re.DOTALL)
+          if pattern.search(text):
+              new_text = pattern.sub(block, text)
+          else:
+              insert_marker = "Uživatelský návod"
+              section = "## Stáhnout\n\n" + block + "\n\n"
+              idx = text.find(insert_marker)
+              if idx == -1:
+                  new_text = section + text
+              else:
+                  line_start = text.rfind("\n", 0, idx) + 1
+                  new_text = text[:line_start] + section + text[line_start:]
+
+          if new_text != text:
+              path.write_text(new_text, encoding="utf-8")
+              print("README updated")
+          else:
+              print("README unchanged")
+          PY
+
+      - name: Commit README update
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- README.md; then
+            echo "No README changes to commit."
+            exit 0
+          fi
+          git add README.md
+          git commit -m "chore(release): update download link to ${VERSION} [skip ci]"
+          git push origin HEAD:main
